@@ -53,7 +53,7 @@ docker compose -p tf2 exec tf2-server rcon changelevel pl_upward
 
 ## Updating
 
-The pin lives in the `x-images` block at the top of the compose file, as an interpolation default, so a `git pull` delivers the image this repository has tested. The tag is `latest` because upstream publishes no version numbers: the digest is the version. When Valve ships an update, Laclede's LAN rebuilds the image, the daily freshness check goes red, and the pin moves deliberately. A client on a newer build than the server cannot connect, so this is worth acting on the day it happens.
+The pin lives in the `x-images` block at the top of the compose file, as an interpolation default, so a `git pull` delivers the image this repository has tested. The tag is `latest` because upstream publishes no version numbers: the digest is the version. When Valve ships an update, Laclede's LAN rebuilds the image, the daily freshness check goes red, and the pin moves deliberately. A client on a newer build than the server cannot connect, so this is worth acting on the day it happens. `./update.sh` does that on purpose: it moves to the latest release tag, refuses to cross a major unattended, and names any new required variable before anything has moved.
 
 ## Testing
 

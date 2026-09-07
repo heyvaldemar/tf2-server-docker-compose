@@ -9,15 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(no unreleased changes yet)_
 
-## [1.0.0] - 2026-09-07
+## [1.1.0] - 2026-09-07
 
 ### Added
 
-- **A Team Fortress 2 dedicated server**, image pinned by digest as an
-  interpolation default, so `git pull` delivers the build this repository has
-  tested and `.env` overrides survive it. The tag is `latest` because upstream
-  publishes no version numbers: the digest is the version, and the daily
-  freshness check is what notices a rebuild.
+- **`update.sh`: move between release tags on purpose.** It updates to the latest release (a combination this repository's CI has booted and smoke-tested), refuses to cross a major version unattended, refuses to run over local changes, and names any new required variable before anything has moved. `--dry-run` says what would happen.
+
+s check is what notices a rebuild.
 - **A health check anchored to the game binary rather than a substring.** Two
   commands run in the container: `srcds_linux64`, the game, and
   `srcds_run_64`, its restart wrapper. A substring search is satisfied by
@@ -44,5 +42,6 @@ _(no unreleased changes yet)_
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/releases/tag/v1.0.0
