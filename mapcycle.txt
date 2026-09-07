@@ -1,0 +1,12 @@
+koth_harvest_final
+koth_suijin
+koth_highpass
+koth_brazil
+koth_cascade
+pl_upward
+pl_badwater
+cp_dustbowl
+cp_gravelpit
+cp_badlands
+ctf_2fort
+ctf_turbine

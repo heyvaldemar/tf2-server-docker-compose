@@ -1,0 +1,103 @@
+# Image pin lives HERE, as an interpolation default, so `git pull` (or
+# re-downloading this file) delivers the exact image this repository has
+# tested. Set TF2_SERVER_IMAGE_VERSION in .env to run a different tag while
+# the digest for it is fetched normally, or TF2_SERVER_IMAGE_TAG to replace
+# the whole reference. CI (the Trivy scan and check-pin-freshness) reads the
+# pin from this line: this block is the single source of truth.
+#
+# The tag is `latest` on purpose. Laclede's LAN rebuilds this image with the
+# current game baked in and publishes no version numbers, so the digest IS the
+# version: a Valve update arrives as a new digest under the same tag, the daily
+# freshness job goes red, and the pin moves deliberately.
+x-images:
+  tf2-server: &tf2-server-image ${TF2_SERVER_IMAGE_TAG:-lacledeslan/gamesvr-tf2:${TF2_SERVER_IMAGE_VERSION:-latest@sha256:65732a9315aaa4cc6d6b489bbb25ded880be83f280cefaed9326d0b161fd931f}}
+
+services:
+  tf2-server:
+    image: *tf2-server-image
+    # Handles untrusted input from the internet and cannot gain privileges
+    # through a setuid binary.
+    security_opt:
+      - no-new-privileges:true
+    # 4g is measured, not guessed: a full 24-slot server peaked at 1.57 GB on
+    # the machine this template comes from. The ceiling is there so a leak here
+    # cannot pick a victim elsewhere — with no limit the kernel's OOM killer
+    # chooses by size, so the process it kills is rarely the one at fault.
+    deploy:
+      resources:
+        limits:
+          memory: ${TF2_SERVER_MEMORY_LIMIT:-4g}
+          cpus: "${TF2_SERVER_CPU_LIMIT:-2.0}"
+        reservations:
+          memory: ${TF2_SERVER_MEMORY_RESERVATION:-1g}
+          cpus: "${TF2_SERVER_CPU_RESERVATION:-0.5}"
+    ports:
+      # THE NUMBER MUST MATCH INSIDE AND OUT. Steam's server list records the
+      # port the server binds, not the one you forwarded. Publish 27016 for a
+      # server bound on 27015 and the list hands players an address where a
+      # different server answers: the connection succeeds, the handshake fails
+      # against the wrong game, and every log line blames the client.
+      - "${TF2_SERVER_PORT:-27015}:${TF2_SERVER_PORT:-27015}/udp"
+      # rcon is TCP on the same number.
+      - "${TF2_SERVER_PORT:-27015}:${TF2_SERVER_PORT:-27015}/tcp"
+    working_dir: /app/tf2
+    # THE 64-BIT BINARY. `--net=host` hangs srcds at "Initializing Steam
+    # libraries" on a host with more than one interface, with no error. This
+    # container gets a bridge namespace of its own, which is why it starts.
+    command:
+      - ./srcds_run_64
+      - -game
+      - tf
+      - -console
+      - -usercon
+      - -port
+      - "${TF2_SERVER_PORT:-27015}"
+      # A Game Server Login Token, from https://steamcommunity.com/dev/managegameservers
+      # (app id 440). Without one the server runs but stays off the public list,
+      # which looks identical to a broken server from a player's side.
+      - +sv_setsteamaccount
+      - "${TF2_SERVER_STEAM_TOKEN:?set in .env - see .env.example}"
+      - +maxplayers
+      - "${TF2_SERVER_MAX_PLAYERS:-24}"
+      - +map
+      - "${TF2_SERVER_START_MAP:-koth_harvest_final}"
+      - +sv_region
+      - "${TF2_SERVER_REGION:-255}"
+      - +rcon_password
+      - "${TF2_SERVER_RCON_PASSWORD:?set in .env - see .env.example for generation command}"
+      # The hostname is NOT on this command line: the launcher drops everything
+      # after a `|` in an argument, so a name like "Casual | 24/7" arrived as
+      # "Casual". It lives in server.cfg, where the whole string survives.
+    volumes:
+      - ./server.cfg:/app/tf2/tf/cfg/server.cfg:ro
+      - ./mapcycle.txt:/app/tf2/tf/cfg/mapcycle.txt:ro
+      # Navigation meshes for maps that ship without one. Bots cannot move on a
+      # map that has no mesh; they spawn and stand there. Generate one on a
+      # local client with `nav_generate` and drop the .nav files here.
+      - ./navs:/app/tf2/tf/custom/navs:ro
+    healthcheck:
+      # ANCHORED, BECAUSE THE WRAPPER IS ALSO CALLED srcds. Two commands run
+      # here: `srcds_linux64`, the game, and `srcds_run_64`, the script that
+      # restarts it when it exits. A check for the substring `srcds` is
+      # satisfied by either, so the game can crash and leave the wrapper
+      # standing while the container reports healthy — and docker does not
+      # restart an unhealthy container by itself, so nothing else catches it.
+      # tests/e2e-healthcheck.sh proves the distinction against a real
+      # container: the anchored form goes red with only the wrapper left, and
+      # the substring form stays green.
+      test: ["CMD-SHELL", "grep -qsE '^srcds_linux(64)?$' /proc/[0-9]*/comm"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # The game is baked into the image; three minutes covers the first map
+      # load on a slow disk.
+      start_period: ${TF2_SERVER_START_PERIOD:-3m}
+    # srcds writes its state on the way out. Ten seconds and a SIGKILL is
+    # enough to lose the last round.
+    stop_grace_period: ${TF2_SERVER_STOP_GRACE_PERIOD:-30s}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: ${TF2_SERVER_LOG_MAX_SIZE:-10m}
+        max-file: "${TF2_SERVER_LOG_MAX_FILE:-3}"
