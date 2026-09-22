@@ -44,6 +44,13 @@ services:
     # THE 64-BIT BINARY. `--net=host` hangs srcds at "Initializing Steam
     # libraries" on a host with more than one interface, with no error. This
     # container gets a bridge namespace of its own, which is why it starts.
+    environment:
+      # THE GAME GETS THE HOUSEHOLD CLOCK TOO, not only whatever sidecar
+      # sits beside it. Every timestamp this server writes — bans, joins,
+      # the crash it leaves behind — is read next to a log line from
+      # somewhere else, and two clocks make that arithmetic. UTC by
+      # default, which is a choice rather than an accident.
+      TZ: ${TF2_SERVER_TIMEZONE:-UTC}
     command:
       - ./srcds_run_64
       - -game
