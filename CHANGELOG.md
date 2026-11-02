@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [2.0.0] - 2026-11-01
+
 ### Changed
 
 - **The first start of 2.0 downloads the game, about 15 GB, into a new volume, `tf2-server-game`.** This is the one disruption, and why this is a major. Up to 1.x the game was baked into `lacledeslan/gamesvr-tf2`, and "a Valve update arrives as a new digest" assumed that image followed Valve. It was last built on 2026-08-13 and reports version 10828683 (its `steam.inf`, read in CI on 2026-11-01). Asked about that version, Steam's `UpToDateCheck` answers `up_to_date: false, version_is_listable: false, required_version: 11191711`: a server deployed from 1.x was healthy and answered every query, Steam's list did not show it, the current client could not join it, and CI was green, because it never asked Steam. The same `.env`, `server.cfg`, `mapcycle.txt`, `navs/` and port carry over. After moving, `docker image rm lacledeslan/gamesvr-tf2` gives back 11 GB. The README's "Moving from 1.x" has the three commands.
@@ -24,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **rcon works.** The README said `docker compose -p tf2 exec tf2-server rcon status`; the 1.x image had no rcon program, so that command could only fail. `tools/rcon.sh` speaks the protocol from inside the server's container, with the password from `.env` on stdin, never in argv. CI checks `status` against the real server and a wrong password refused.
 - **`update.sh` no longer stops without a word when a release adds a variable and no compose file requires one.** The search for `${VAR:?}` came back empty, and under `pipefail` that empty result ended the script with status 1 right after it listed the new variables.
 - **`update.sh` stops on a `.env` it cannot read, before the checkout.** It used to fall through: every new required variable read as "not set", or, with none, the tree moved to the new tag and `docker compose up` failed on the permission. Now it names the file, its owner and mode, and changes nothing.
-
 ## [1.2.0] - 2026-09-22
 
 ### Added
@@ -64,7 +67,8 @@ s check is what notices a rebuild.
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.2.0...v2.0.0
 [1.2.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/releases/tag/v1.0.0
