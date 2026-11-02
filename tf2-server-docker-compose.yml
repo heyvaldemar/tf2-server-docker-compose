@@ -5,22 +5,40 @@
 # the whole reference. CI (the Trivy scan and check-pin-freshness) reads the
 # pin from this line: this block is the single source of truth.
 #
-# The tag is `latest` on purpose. Laclede's LAN rebuilds this image with the
-# current game baked in and publishes no version numbers, so the digest IS the
-# version: a Valve update arrives as a new digest under the same tag, the daily
-# freshness job goes red, and the pin moves deliberately.
+# THE IMAGE IS THE RUNTIME, NOT THE GAME. LinuxGSM's tf2 image is rebuilt
+# every week and carries what the server needs to run (the libraries, SteamCMD
+# and python3); the game itself lives in the tf2-server-game volume and is
+# brought to Steam's current build every time the server starts. LinuxGSM
+# itself is not used: its update path trusts SteamCMD's own answer, which
+# scripts/update-game.sh explains is not to be trusted. The tag is the game
+# and carries no version; the digest is the version, the daily freshness job
+# goes red when it moves, and the pin moves deliberately.
 x-images:
-  tf2-server: &tf2-server-image ${TF2_SERVER_IMAGE_TAG:-lacledeslan/gamesvr-tf2:${TF2_SERVER_IMAGE_VERSION:-latest@sha256:65732a9315aaa4cc6d6b489bbb25ded880be83f280cefaed9326d0b161fd931f}}
+  tf2-server: &tf2-server-image ${TF2_SERVER_IMAGE_TAG:-gameservermanagers/gameserver:${TF2_SERVER_IMAGE_VERSION:-tf2@sha256:9459fc482a70306b56aefa40d5f9b98a989addfae4d96ea4508ff98bce1b8559}}
 
 services:
   tf2-server:
     image: *tf2-server-image
+    # Not the image's entrypoint, which starts LinuxGSM: scripts/start-server.sh
+    # brings the game to Steam's build with scripts/update-game.sh, then starts
+    # it. On the first start that is the whole game, about 15 GB, and `docker
+    # compose -p tf2 logs -f tf2-server` shows the download; after that it
+    # compares build ids, a few seconds, and validates only when Steam has
+    # moved on. A restart is therefore an update, which is how
+    # tools/steam-uptodate.sh updates an empty server that has fallen behind.
+    entrypoint: ["/bin/sh", "/start-server.sh"]
+    # The uid the image's /data belongs to, so a new volume, which takes its
+    # owner from the image's directory on first mount, is this user's.
+    user: "1000:1000"
     # Handles untrusted input from the internet and cannot gain privileges
     # through a setuid binary.
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     # 4g is measured, not guessed: a full 24-slot server peaked at 1.57 GB on
-    # the machine this template comes from. The ceiling is there so a leak here
+    # the machine this template comes from, and SteamCMD verifying the 15 GB
+    # install before it peaked at 1.03 GB in CI. The ceiling is there so a leak here
     # cannot pick a victim elsewhere — with no limit the kernel's OOM killer
     # chooses by size, so the process it kills is rarely the one at fault.
     deploy:
@@ -40,11 +58,22 @@ services:
       - "${TF2_SERVER_PORT:-27015}:${TF2_SERVER_PORT:-27015}/udp"
       # rcon is TCP on the same number.
       - "${TF2_SERVER_PORT:-27015}:${TF2_SERVER_PORT:-27015}/tcp"
-    working_dir: /app/tf2
+    # NO working_dir, AND NOTHING MOUNTED INSIDE THE GAME DIRECTORY. Docker
+    # creates a missing working directory, and the parents of a bind mount's
+    # target, inside the volume, owned by root. The first 2.0 candidate had
+    # working_dir: /data/tf2, so on a fresh volume /data/tf2 belonged to root
+    # before SteamCMD ran; SteamCMD, running as uid 1000, could not write it,
+    # installed the 15 GB into its own library instead, and still printed
+    # "Success! App '232250' fully installed." scripts/update-game.sh now
+    # refuses a directory it cannot write, and the files below are mounted
+    # under /config and linked into place by scripts/start-server.sh.
     # THE 64-BIT BINARY. `--net=host` hangs srcds at "Initializing Steam
     # libraries" on a host with more than one interface, with no error. This
     # container gets a bridge namespace of its own, which is why it starts.
     environment:
+      # Steam's client library is looked for in ~/.steam/sdk64;
+      # scripts/update-game.sh puts it there, in the game directory.
+      HOME: /data/tf2
       # THE GAME GETS THE HOUSEHOLD CLOCK TOO, not only whatever sidecar
       # sits beside it. Every timestamp this server writes — bans, joins,
       # the crash it leaves behind — is read next to a log line from
@@ -52,7 +81,6 @@ services:
       # default, which is a choice rather than an accident.
       TZ: ${TF2_SERVER_TIMEZONE:-UTC}
     command:
-      - ./srcds_run_64
       - -game
       - tf
       - -console
@@ -76,12 +104,17 @@ services:
       # after a `|` in an argument, so a name like "Casual | 24/7" arrived as
       # "Casual". It lives in server.cfg, where the whole string survives.
     volumes:
-      - ./server.cfg:/app/tf2/tf/cfg/server.cfg:ro
-      - ./mapcycle.txt:/app/tf2/tf/cfg/mapcycle.txt:ro
+      # The game, kept current at every start; the files below sit on top of it.
+      - tf2-server-game:/data
+      - ./scripts/start-server.sh:/start-server.sh:ro
+      - ./scripts/update-game.sh:/update-game.sh:ro
+      # Linked into tf/cfg and tf/custom by scripts/start-server.sh.
+      - ./server.cfg:/config/server.cfg:ro
+      - ./mapcycle.txt:/config/mapcycle.txt:ro
       # Navigation meshes for maps that ship without one. Bots cannot move on a
       # map that has no mesh; they spawn and stand there. Generate one on a
       # local client with `nav_generate` and drop the .nav files here.
-      - ./navs:/app/tf2/tf/custom/navs:ro
+      - ./navs:/config/navs:ro
     healthcheck:
       # ANCHORED, BECAUSE THE WRAPPER IS ALSO CALLED srcds. Two commands run
       # here: `srcds_linux64`, the game, and `srcds_run_64`, the script that
@@ -96,9 +129,12 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      # The game is baked into the image; three minutes covers the first map
-      # load on a slow disk.
-      start_period: ${TF2_SERVER_START_PERIOD:-3m}
+      # A FIRST START IS A 15 GB DOWNLOAD, NOT A MAP LOAD. A slow link takes
+      # far longer than the map, and a check that gave up after three minutes
+      # would call a server unhealthy while SteamCMD was still fetching it.
+      # The start period only forgives failures: a server that comes up in a
+      # minute is healthy in a minute.
+      start_period: ${TF2_SERVER_START_PERIOD:-60m}
     # srcds writes its state on the way out. Ten seconds and a SIGKILL is
     # enough to lose the last round.
     stop_grace_period: ${TF2_SERVER_STOP_GRACE_PERIOD:-30s}
@@ -108,3 +144,11 @@ services:
       options:
         max-size: ${TF2_SERVER_LOG_MAX_SIZE:-10m}
         max-file: "${TF2_SERVER_LOG_MAX_FILE:-3}"
+
+# THE GAME, AND NOTHING ELSE. Everything a person configures is a file in this
+# repository, mounted on top of it, so losing the volume costs a download and
+# nothing more: `docker compose down -v` deletes it and the next start fetches
+# the game again. That is why it is not declared external, as the CS2
+# templates' volumes are, where the same 60 GB would come back twice.
+volumes:
+  tf2-server-game:

@@ -95,8 +95,9 @@ jobs:
           category: trivy-${{ matrix.name }}
 
   healthcheck:
-    name: The health check, in both directions
+    name: The health check, both ways, and the scripts, against stubs
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,20 +106,149 @@ jobs:
         # Pinned, and the same image a maintainer runs locally: Ubuntu's
         # packaged shellcheck is a different version with different defaults.
         run: |
-          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 tests/e2e-healthcheck.sh
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 \
+            tests/*.sh tools/*.sh scripts/*.sh update.sh
 
       - name: Prove the exact match catches what a substring match misses
         # Assertions against a real container, with no game download: two
-        # processes named cs2 and cs2.sh are the whole fixture. The game is
-        # killed and the exact check must go red while the substring check
-        # stays green - if the substring form ever failed too, the comment in
-        # the compose file would be wrong and the run says so.
+        # processes named srcds_linux64 and srcds_run_64 are the whole fixture.
+        # The game is killed and the exact check must go red while the
+        # substring check stays green - if the substring form ever failed too,
+        # the comment in the compose file would be wrong and the run says so.
         run: |
           chmod +x tests/e2e-healthcheck.sh
           ./tests/e2e-healthcheck.sh
+
+      - name: The Steam check, every branch, against stubbed answers
+        run: bash tests/steam-uptodate.sh
+
+      - name: Every script in tools/ is read whole before it runs
+        run: bash tests/read-whole.sh
+
+      - name: The timer keeps running the night the clocks go back
+        run: bash tests/timers.sh
 
       - name: The compose file parses with the shipped defaults
         run: |
           sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
           docker compose -f tf2-server-docker-compose.yml config >/dev/null
           echo "compose OK"
+
+  boot:
+    name: The game, installed from Steam and called current by Steam
+    # THE QUESTION THE OLD CI NEVER ASKED. Up to v1 this workflow linted,
+    # scanned and parsed, and stayed green for months over an image whose
+    # game Steam no longer accepted. This job installs the game the way a
+    # first start does, boots it, and asks Steam about the version the server
+    # itself reports over A2S - with tools/steam-uptodate.sh, the script the
+    # timer runs. Then it makes the server stale on purpose and has the same
+    # script bring it back, so the update path is shown working against the
+    # real SteamCMD and the real Steam, not described.
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    env:
+      COMPOSE: docker compose -f tf2-server-docker-compose.yml -p tf2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Make room for the game
+        # About 15 GB of game and 1.5 GB of image; a runner starts with less
+        # free than that on its root disk.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
+          df -h /
+
+      - name: First start - the game is downloaded into the volume
+        run: |
+          sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
+          start=$(date +%s)
+          $COMPOSE up -d
+          # The server's start script downloads the game before srcds; its
+          # outcome is the last "tf2-update:" line in the log.
+          for _ in $(seq 1 120); do
+            line="$($COMPOSE logs --no-log-prefix tf2-server | grep -a '^tf2-update:' | tail -1)"
+            case $line in
+              *"updated build"*|*"is current"*) break ;;
+              *"there is no game"*|*FAILED*) break ;;
+            esac
+            sleep 15
+          done
+          $COMPOSE logs --no-log-prefix tf2-server | grep -a '^tf2-update:'
+          echo "install finished $(( $(date +%s) - start )) s after up -d"
+          [[ $line == *"updated build"* ]] || { echo "::error::the first start did not install the game"; $COMPOSE logs --tail 40 tf2-server; exit 1; }
+          $COMPOSE exec -T tf2-server sh -c 'du -sh /data/tf2; stat -c "%U:%G %n" /data/tf2 /data/tf2/steamapps/appmanifest_232250.acf; ls -l /data/tf2/tf/cfg/server.cfg /data/tf2/tf/custom/navs'
+
+      - name: Wait for the health check to go green
+        run: |
+          cid="$($COMPOSE ps -q tf2-server)"
+          for _ in $(seq 1 60); do
+            s="$(docker inspect "$cid" --format '{{.State.Health.Status}}' 2>/dev/null || echo none)"
+            echo "health: $s"
+            [ "$s" = healthy ] && exit 0
+            [ "$s" = unhealthy ] && break
+            sleep 10
+          done
+          echo "::error::the server never reported healthy"
+          $COMPOSE logs --tail 80
+          exit 1
+
+      - name: Steam calls the server current
+        # --check: 0 current, 1 behind, 3 no answer yet (the map is still
+        # loading). Healthy is not listening, so "no answer" is retried.
+        run: |
+          for attempt in $(seq 1 40); do
+            rc=0; tools/steam-uptodate.sh --check || rc=$?
+            [ "$rc" = 3 ] || exit "$rc"
+            echo "attempt $attempt: not answering yet"
+            sleep 10
+          done
+          $COMPOSE logs --tail 80 tf2-server
+          exit 3
+
+      - name: rcon answers, and refuses a wrong password
+        run: |
+          out="$(tools/rcon.sh status)"; printf '%s\n' "$out" | head -5
+          grep -q '^hostname' <<<"$out" || { echo "::error::status did not return the hostname line"; exit 1; }
+          cp .env .env.good
+          sed -i 's/^TF2_SERVER_RCON_PASSWORD=.*/TF2_SERVER_RCON_PASSWORD=not-the-password/' .env
+          rc=0; tools/rcon.sh status || rc=$?
+          mv .env.good .env
+          [ "$rc" = 2 ] || { echo "::error::a wrong password was not refused (exit $rc)"; exit 1; }
+          echo "a wrong password: refused, exit 2"
+
+      - name: Plant - a stale version turns the check red
+        # The version an August 2026 image carried, and an older build in the
+        # app manifest: what a server left behind by Valve looks like. Only
+        # the game process is restarted, by its wrapper, the way a server keeps
+        # running when Valve ships a build: a container restart would update
+        # it before srcds came back.
+        run: |
+          $COMPOSE exec -T tf2-server sh -c '
+            cd /data/tf2
+            sed -i -E "s/^(ClientVersion|ServerVersion|PatchVersion)=.*/\1=10828683/" tf/steam.inf
+            sed -i -E "s/(\"buildid\"[[:space:]]+\")[0-9]+/\11/" steamapps/appmanifest_232250.acf
+            grep -E "Version=" tf/steam.inf'
+          $COMPOSE exec -T tf2-server pkill -x srcds_linux64
+          # Until the restarted game answers: the old process may still answer
+          # current for a few seconds, and a restarting one not at all.
+          for _ in $(seq 1 40); do
+            rc=0; tools/steam-uptodate.sh --check || rc=$?
+            [ "$rc" = 1 ] && break
+            sleep 10
+          done
+          [ "$rc" = 1 ] || { echo "::error::the stale server was not called out of date (exit $rc)"; exit 1; }
+
+      - name: The timer's script brings it back, and Steam agrees
+        run: |
+          rc=0; tools/steam-uptodate.sh || rc=$?
+          $COMPOSE logs --no-log-prefix tf2-server | grep -a '^tf2-update:' | tail -2
+          [ "$rc" = 0 ] || { echo "::error::the update did not take (exit $rc)"; exit 1; }
+          tools/steam-uptodate.sh --check
+
+      - name: Stop
+        if: always()
+        run: $COMPOSE down -v --remove-orphans
