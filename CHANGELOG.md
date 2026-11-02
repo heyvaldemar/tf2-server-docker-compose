@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Changed
+
+- **The fall-back night is shown on a neutral zone.** `tests/timers.sh` reads Berlin's fall-back on 25 October 2026; any zone with a fall-back shows the same skip, and the test still fails on a calendar without `UTC`. The README and the timer's comment no longer name the night by date and hour.
+
+### Added
+
+- **Docker making the game directory root's is measured, and refused.** `tests/unwritable-game-dir.sh` creates a container, never started, with `working_dir: /data/tf2` on a fresh volume, the way the first 2.0 candidate's server was created, and finds `/data/tf2` owned by `0:0`; `scripts/update-game.sh`, as uid 1000, then exits 1 with "belongs to 0:0 ... SteamCMD cannot install there" before SteamCMD is called. A plant without the check hands SteamCMD the root-owned directory, and a control on a plain fresh volume gets a directory owned by uid 1000. `docs/evidence/steamcmd-unwritable-dir.md` keeps the CI log of the real SteamCMD in that situation: `Failed to create "/data/tf2/steamapps" folder.`, the game in its own library, and "Success! App '232250' fully installed.", exit 0.
 
 ## [2.0.0] - 2026-11-01
 

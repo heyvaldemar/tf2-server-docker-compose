@@ -122,6 +122,14 @@ jobs:
       - name: The Steam check, every branch, against stubbed answers
         run: bash tests/steam-uptodate.sh
 
+      - name: Docker makes the game directory root's, and the update refuses it
+        # A container created with working_dir inside the volume leaves that
+        # directory owned by root; SteamCMD handed one it cannot write
+        # installed into its own library and printed Success
+        # (docs/evidence/steamcmd-unwritable-dir.md). Measured here, with the
+        # refusal, a plant without it, and a control.
+        run: bash tests/unwritable-game-dir.sh
+
       - name: Every script in tools/ is read whole before it runs
         run: bash tests/read-whole.sh
 

@@ -86,7 +86,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now steam-uptodate.timer
 tools/steam-uptodate.sh --dry-run    # what it would do right now
 ```
 
-**The timer runs on UTC, with a net under it.** On 2026-11-01, when the clocks went back an hour, the server this template comes from ran none of its local-time timers between 06:00 and 07:00 UTC: systemd reads a local calendar such as `*:0/15` in wall-clock time and took the repeated hour as already gone. A calendar in UTC has no repeated hour, and `OnUnitActiveSec=16min` makes up a run missed for any other reason. `tests/timers.sh` checks both with `systemd-analyze` on Toronto time that night.
+**The timer runs on UTC, with a net under it.** The night the clocks went back an hour, the server this template comes from ran none of its local-time timers for that hour: systemd reads a local calendar such as `*:0/15` in wall-clock time and took the repeated hour as already gone. A calendar in UTC has no repeated hour, and `OnUnitActiveSec=16min` makes up a run missed for any other reason. `tests/timers.sh` checks both with `systemd-analyze` from one second before a fall-back (Berlin's, on 25 October 2026).
 
 **Every script in `tools/` is read whole before it runs.** bash reads a script as it executes it, and after each command reads on from the same byte offset in whatever the file holds by then; on the server this template comes from, a timer started a script while its file was being edited in place, and the run died on a syntax error. Each script's body is one brace group, which bash parses in full before the first line runs, ending in `exit`.
 
@@ -118,6 +118,7 @@ CI installs the game from Steam and boots it on every push, the way a first star
 Without a game:
 
 - `tests/steam-uptodate.sh` drives every branch of the script against stubbed A2S and Steam answers, then runs four copies with one rule taken out each (the player count, the proof by Steam, the host lock, the daily limit) and sees each do what the rule prevents.
+- `tests/unwritable-game-dir.sh` creates a container, never started, with `working_dir: /data/tf2` on a fresh volume, as the first 2.0 candidate's server was, and finds `/data/tf2` owned by root; `scripts/update-game.sh` then refuses it before calling SteamCMD. A plant without the check hands SteamCMD that directory, which is what made the real one install 15 GB elsewhere and print "Success!" ([the log](docs/evidence/steamcmd-unwritable-dir.md)).
 - `tests/read-whole.sh` rewrites the script's own file in place under a running copy, with and without its braces.
 - `tests/timers.sh` checks the timer against the night the clocks went back.
 - `tests/e2e-healthcheck.sh` runs five assertions against a real container: the anchored check is green with the game running, the substring check is green too, and after the game is killed the anchored one goes red while the substring one stays green with the wrapper still standing.
