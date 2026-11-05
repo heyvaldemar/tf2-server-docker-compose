@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Security
+
+- **`gameservermanagers/gameserver:tf2` was rebuilt upstream**; the pin moved from `sha256:9459fc482a70…` to `sha256:9971fa70c340…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
 
 ## [2.0.1] - 2026-11-01
 
