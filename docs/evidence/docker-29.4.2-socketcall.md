@@ -25,7 +25,13 @@ Errors on 29.4.2".
 
 GitHub's `ubuntu-latest` became the ubuntu-26.04 image for this repository on
 2026-11-07, and that image ships Docker Engine 29.4.2; the ubuntu-24.04 image
-ships 28.0.4. Both run kernel 7.0 (7.0.0-1019-azure and 7.0.0-1017-azure), so
+ships 28.0.4. GitHub's tracking issue is
+[actions/runner-images#14790](https://github.com/actions/runner-images/issues/14790),
+"Ubuntu 26.04: Docker 29.4.2 blocks socketcall, so i386 containers have no
+network", open since 2026-09-26; the fix,
+[actions/runner-images#15205](https://github.com/actions/runner-images/pull/15205),
+moves the image to Docker 29.7.2 and was not merged on 2026-11-08. Once it is,
+the CI step below finds another version and does nothing. Both run kernel 7.0 (7.0.0-1019-azure and 7.0.0-1017-azure), so
 the kernel is not the difference. Ubuntu 26.04's own `docker.io` package is
 27.5.1 and never had the rule.
 
