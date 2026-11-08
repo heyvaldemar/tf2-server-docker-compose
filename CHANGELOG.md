@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [2.0.4] - 2026-11-08
+
 ### Security
 
 - **The Steam token and the RCON password are no longer on the server's command line.** They were passed to srcds as `+sv_setsteamaccount <token>` and `+rcon_password <password>`, so both sat in its arguments for as long as the server ran, where every user on the host reads them with `ps` (`/proc/<pid>/cmdline` is world-readable, and the host sees every container's processes). The compose file now hands them to the container as environment variables; `scripts/start-server.sh` writes them with the shell's own `printf` into `tf/cfg/secrets.cfg` (mode 600, the server's user), and the command line carries `+exec secrets.cfg` in their place, before `+map`, where the token was. A value holding a double quote or a line break, which a Source config line cannot carry, stops the start with a message instead of being cut. CI boots the real game with two random secrets, reads every command line on the runner and in the container, and requires neither to appear; RCON still answers with the password and refuses a wrong one.
@@ -22,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`scripts/update-game.sh` names Docker Engine 29.4.2 when SteamCMD cannot get online.** It used to say only "could not ask Steam for the current build"; when SteamCMD's log carries either text that release produces, it now says the host's Docker may be 29.4.2 and what to do. `tests/steamcmd-offline.sh` feeds it both texts and a SteamCMD that answers nothing, which must not blame Docker.
-
 ## [2.0.3] - 2026-11-07
 
 ### Security
@@ -102,7 +105,8 @@ s check is what notices a rebuild.
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.4...HEAD
+[2.0.4]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.0...v2.0.1
