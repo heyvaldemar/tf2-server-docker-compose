@@ -87,6 +87,15 @@ done
 
 if [ -z "$want" ]; then
     tr -d '\r' <"$LOG" | grep -v '^[[:space:]]*$' | tail -5 | sed 's/^/tf2-update:   steamcmd: /'
+    # "OFFLINE" CAN BE DOCKER 29.4.2. SteamCMD is a 32-bit program and makes
+    # its sockets with socketcall(2). Docker Engine 29.4.2, and that release
+    # alone, answers socketcall with ENOSYS (error 38) in its default seccomp
+    # profile (moby/moby#52506): Steam is up, the network is up, and SteamCMD
+    # either cannot download its own update ("needs to be online to update")
+    # or retries a socket it cannot make. 29.4.3 reverted the rule.
+    if grep -qE 'failed to create socket, error \[no name available\] \(38\)|Steamcmd needs to be online to update' "$LOG"; then
+        echo "tf2-update: SteamCMD could not get online. If this host runs Docker Engine 29.4.2 (docker version), its seccomp profile blocks the system call SteamCMD makes sockets with; upgrade Docker to 29.4.3 or later (README: \"Docker Engine 29.4.2\")"
+    fi
     done_with "could not ask Steam for the current build; starting on build ${have:-none}"
 fi
 if [ "$have" = "$want" ] && installed; then

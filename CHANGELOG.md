@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Steam token and the RCON password are no longer on the server's command line.** They were passed to srcds as `+sv_setsteamaccount <token>` and `+rcon_password <password>`, so both sat in its arguments for as long as the server ran, where every user on the host reads them with `ps` (`/proc/<pid>/cmdline` is world-readable, and the host sees every container's processes). The compose file now hands them to the container as environment variables; `scripts/start-server.sh` writes them with the shell's own `printf` into `tf/cfg/secrets.cfg` (mode 600, the server's user), and the command line carries `+exec secrets.cfg` in their place, before `+map`, where the token was. A value holding a double quote or a line break, which a Source config line cannot carry, stops the start with a message instead of being cut. CI boots the real game with two random secrets, reads every command line on the runner and in the container, and requires neither to appear; RCON still answers with the password and refuses a wrong one.
 
+### Fixed
+
+- **CI boots the game again on GitHub's ubuntu-26.04 runner.** Since 2026-11-07 `ubuntu-latest` is that image, which ships Docker Engine 29.4.2, and that release alone answers the 32-bit `socketcall` system call with ENOSYS in its default seccomp profile ([moby/moby#52506](https://github.com/moby/moby/issues/52506)). SteamCMD could not get online: "!!! Fatal Error: Steamcmd needs to be online to update.", with Steam and the network both up. On 29.4.2, and only there, CI now gives the daemon the profile Docker 29.4.3 ships (moby/profiles seccomp v0.2.3, pinned by commit and checksum) before it starts the server; anywhere else the step does nothing. Measured on every affected template's pinned image in tf2-server-docker-compose run 42496129688.
+
+### Changed
+
+- **The README names Docker Engine 29.4.2.** That release alone stops SteamCMD, which this image runs to install and update the game: upgrade to 29.4.3 or later, which reverted the rule, or point the daemon's `seccomp-profile` at the profile 29.4.3 ships. Ubuntu 26.04's own `docker.io` (27.5.1) never had it.
+
+### Added
+
+- **`scripts/update-game.sh` names Docker Engine 29.4.2 when SteamCMD cannot get online.** It used to say only "could not ask Steam for the current build"; when SteamCMD's log carries either text that release produces, it now says the host's Docker may be 29.4.2 and what to do. `tests/steamcmd-offline.sh` feeds it both texts and a SteamCMD that answers nothing, which must not blame Docker.
+
 ## [2.0.3] - 2026-11-07
 
 ### Security
