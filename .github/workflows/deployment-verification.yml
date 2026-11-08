@@ -173,6 +173,9 @@ jobs:
       - name: First start - the game is downloaded into the volume
         run: |
           sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
+          # Two different random secrets, so the command-line check below
+          # looks for values nothing else on the runner could hold.
+          sed -i -E "s/^TF2_SERVER_RCON_PASSWORD=.*/TF2_SERVER_RCON_PASSWORD=$(openssl rand -hex 16)/; s/^TF2_SERVER_STEAM_TOKEN=.*/TF2_SERVER_STEAM_TOKEN=$(openssl rand -hex 16)/" .env
           start=$(date +%s)
           $COMPOSE up -d
           # The server's start script downloads the game before srcds; its
@@ -216,6 +219,30 @@ jobs:
           done
           $COMPOSE logs --tail 80 tf2-server
           exit 3
+
+      - name: Neither the token nor the RCON password is on a command line
+        # srcds kept both in its arguments for as long as it ran, where every
+        # user on the host reads them with ps; scripts/start-server.sh writes
+        # them into tf/cfg/secrets.cfg instead. Every command line on the
+        # runner and in the container is read, compared through a file
+        # holding the two values, so neither is ever printed.
+        run: |
+          vals="$(mktemp)"; chmod 600 "$vals"
+          sed -n -E 's/^(TF2_SERVER_RCON_PASSWORD|TF2_SERVER_STEAM_TOKEN)=//p' .env > "$vals"
+          [ "$(grep -c . "$vals")" = 2 ] || { echo "::error::could not read both values from .env"; exit 1; }
+          srcds="$(ps -eo comm=,args= | awk '$1 ~ /^srcds/ { $1 = ""; sub(/^ /, ""); print }')"
+          # shellcheck disable=SC2009  # every command line on the runner, not one process
+          host=$(ps -eo args= | grep -cF -f "$vals" || true)
+          # shellcheck disable=SC2016  # expanded by the container's shell
+          ctr=$($COMPOSE exec -T tf2-server sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\000" " " < "$f" 2>/dev/null; echo; done' | grep -cF -f "$vals" || true)
+          rm -f "$vals"
+          [ -n "$srcds" ] || { echo "::error::no srcds process on the runner to read"; exit 1; }
+          echo "command lines carrying the token or the password: $host on the runner, $ctr in the container"
+          [ "$host" = 0 ] && [ "$ctr" = 0 ] || { echo "::error::a secret is on a command line"; exit 1; }
+          printf '%s\n' "$srcds" | sed 's/^/  srcds: /'
+          $COMPOSE exec -T tf2-server stat -c '%a %U %n' /data/tf2/tf/cfg/secrets.cfg
+          $COMPOSE logs --no-log-prefix tf2-server | grep -a 'secrets.cfg' | head -3 \
+            || { echo "::error::the server log never mentions secrets.cfg: was it executed?"; exit 1; }
 
       - name: rcon answers, and refuses a wrong password
         run: |

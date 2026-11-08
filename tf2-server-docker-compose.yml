@@ -80,6 +80,11 @@ services:
       # somewhere else, and two clocks make that arithmetic. UTC by
       # default, which is a choice rather than an accident.
       TZ: ${TF2_SERVER_TIMEZONE:-UTC}
+      # A Game Server Login Token, from https://steamcommunity.com/dev/managegameservers
+      # (app id 440). Without one the server runs but stays off the public list,
+      # which looks identical to a broken server from a player's side.
+      TF2_SERVER_STEAM_TOKEN: ${TF2_SERVER_STEAM_TOKEN:?set in .env - see .env.example}
+      TF2_SERVER_RCON_PASSWORD: ${TF2_SERVER_RCON_PASSWORD:?set in .env - see .env.example for generation command}
     command:
       - -game
       - tf
@@ -87,19 +92,18 @@ services:
       - -usercon
       - -port
       - "${TF2_SERVER_PORT:-27015}"
-      # A Game Server Login Token, from https://steamcommunity.com/dev/managegameservers
-      # (app id 440). Without one the server runs but stays off the public list,
-      # which looks identical to a broken server from a player's side.
-      - +sv_setsteamaccount
-      - "${TF2_SERVER_STEAM_TOKEN:?set in .env - see .env.example}"
+      # The token and the RCON password, from the file scripts/start-server.sh
+      # writes from the two variables above. On this command line they were
+      # readable by every user on the host for as long as the server ran.
+      # Before +map, as the token itself was: the server logs in when it starts.
+      - +exec
+      - secrets.cfg
       - +maxplayers
       - "${TF2_SERVER_MAX_PLAYERS:-24}"
       - +map
       - "${TF2_SERVER_START_MAP:-koth_harvest_final}"
       - +sv_region
       - "${TF2_SERVER_REGION:-255}"
-      - +rcon_password
-      - "${TF2_SERVER_RCON_PASSWORD:?set in .env - see .env.example for generation command}"
       # The hostname is NOT on this command line: the launcher drops everything
       # after a `|` in an argument, so a name like "Casual | 24/7" arrived as
       # "Casual". It lives in server.cfg, where the whole string survives.

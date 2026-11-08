@@ -14,6 +14,22 @@
 set -u
 /bin/sh /update-game.sh || exit 1
 cd /data/tf2 || exit 1
+# THE TOKEN AND THE RCON PASSWORD GO IN A FILE, NOT ON THE COMMAND LINE. As
+# +sv_setsteamaccount and +rcon_password they sat in srcds's arguments for as
+# long as the server ran, and every user on the host reads a process's
+# arguments with ps. The shell's own printf writes them into a file only this
+# user reads, and the compose file runs it with +exec secrets.cfg. A Source
+# config value cannot carry a double quote or a line break: refused, not cut.
+cfg_value() {  # cfg_value <name> <value>: refuses what a config line cannot hold
+    case $2 in
+        '') echo "start-server: $1 is not set" >&2; return 1 ;;
+        *'"'*|*'
+'*) echo "start-server: $1 holds a double quote or a line break, which a Source config file cannot carry" >&2; return 1 ;;
+    esac
+}
+cfg_value TF2_SERVER_STEAM_TOKEN "${TF2_SERVER_STEAM_TOKEN:-}" || exit 1
+cfg_value TF2_SERVER_RCON_PASSWORD "${TF2_SERVER_RCON_PASSWORD:-}" || exit 1
+( umask 077 && printf 'sv_setsteamaccount "%s"\nrcon_password "%s"\n' "$TF2_SERVER_STEAM_TOKEN" "$TF2_SERVER_RCON_PASSWORD" > tf/cfg/secrets.cfg ) || exit 1
 ln -sfn /config/server.cfg tf/cfg/server.cfg
 ln -sfn /config/mapcycle.txt tf/cfg/mapcycle.txt
 mkdir -p tf/custom
