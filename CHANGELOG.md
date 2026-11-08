@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [2.1.0] - 2026-11-08
+
 ### Changed
 
 - **The health check asks the game, not its process.** It looked for `srcds_linux64` in `/proc`, which a hung or stopped game keeps, and which Black Mesa's server kept on Docker Engine 29.4.2 with no socket at all while it reported healthy. `tools/healthcheck.sh`, mounted read-only, now sends A2S_INFO to the game port at the address it answers on (the one it is bound to, or the container's own when it binds 0.0.0.0, as Left 4 Dead 2 does) and is healthy only on the engine's reply; it handles the challenge Source servers may answer with first, tries twice for a map change, and ends within 7 seconds. It asks from inside the container, so it does not prove the port is published on the host or open in a firewall; the README says so. CI runs it in the pinned image against a stand-in (answers, challenge, silent, no socket), and on the real server changes the map and needs it answering again, then stops the game process with SIGSTOP and needs it red while the old check stays green.
 - **The Docker Engine 29.4.2 note links GitHub's runner-image issue and its fix.** [actions/runner-images#14790](https://github.com/actions/runner-images/issues/14790) is the ubuntu-26.04 image shipping that release; [actions/runner-images#15205](https://github.com/actions/runner-images/pull/15205) moves it to 29.7.2. Documentation only.
-
 ## [2.0.4] - 2026-11-08
 
 ### Security
@@ -108,7 +111,8 @@ s check is what notices a rebuild.
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.4...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.0.1...v2.0.2
