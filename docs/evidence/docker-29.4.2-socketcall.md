@@ -69,16 +69,33 @@ sha256 536529b6…), Docker was restarted, and the same ran again.
 | zomboid (danixu86/project-zomboid-dedicated-server) | the same | logged in |
 | `steamcmd/steamcmd:latest` | the same | logged in |
 | l4d2 (32-bit srcds, game in the image) | unhealthy, 17 restarts in 150 s | healthy, 0 restarts |
-| blackmesa (32-bit srcds, game in the image) | healthy, 0 restarts | (not run: l4d2 held the port) |
+| blackmesa (32-bit srcds, game in the image) | healthy, 0 restarts, but see below | (not run: l4d2 held the port) |
 
-Black Mesa's srcds is 32-bit too and was not affected. The Jedi Academy
-template boots its server in CI on the same runner and stays green.
+**Black Mesa is affected too, silently.** This sweep only read its health and
+its restarts, and a first reading of it as "not affected" was wrong. Run
+[42503040679](https://github.com/heyvaldemar/blackmesa-server-docker-compose/actions/runs/42503040679)
+in the Black Mesa template measured the network, 90 seconds after the server
+reported healthy, on the same 29.4.2 runner:
+
+| Black Mesa | default profile of 29.4.2 | with 29.4.3's profile |
+| --- | --- | --- |
+| health | healthy, 0 restarts | healthy, 0 restarts |
+| A2S query | no answer (timed out) | answered |
+| `tools/rcon.sh status` | nothing accepted a connection | `hostname: Black Mesa Crossfire 24/7` |
+
+Its 32-bit srcds stays up with no socket at all, and a health check that looks
+for the process stays green over a server nobody can reach.
+
+The Jedi Academy template was not measured. Its server binary (`linuxjampded`,
+2009) is 32-bit too, but its CI deliberately starts it without the game's
+assets, which it refuses, so a green run there says nothing about its network
+on 29.4.2.
 
 ## What the templates do about it
 
 - CI, in the templates whose CI runs SteamCMD or 32-bit srcds (tf2, l4d2,
-  humanitz): on Docker 29.4.2, and only there, the daemon gets 29.4.3's
-  profile, pinned by commit and checksum, before the server starts.
+  humanitz, blackmesa): on Docker 29.4.2, and only there, the daemon gets
+  29.4.3's profile, pinned by commit and checksum, before the server starts.
 - README, in every affected template: Docker Engine 29.4.2 named, with the
   upgrade and, until then, the daemon's `seccomp-profile` pointed at 29.4.3's
   profile.
