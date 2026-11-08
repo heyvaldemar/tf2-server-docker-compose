@@ -109,12 +109,12 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 \
             tests/*.sh tools/*.sh scripts/*.sh update.sh
 
-      - name: Prove the exact match catches what a substring match misses
-        # Assertions against a real container, with no game download: two
-        # processes named srcds_linux64 and srcds_run_64 are the whole fixture.
-        # The game is killed and the exact check must go red while the
-        # substring check stays green - if the substring form ever failed too,
-        # the comment in the compose file would be wrong and the run says so.
+      - name: The health check goes by the game's answer, in the pinned image
+        # tools/healthcheck.sh is healthy only on the engine's reply to
+        # A2S_INFO. Run in the pinned image, so its tools are proven there,
+        # against a stand-in that answers, answers after a challenge, stays
+        # silent, or is not there at all (tests/fixtures/fake-a2s.py). The real
+        # game is the boot job below.
         run: |
           chmod +x tests/e2e-healthcheck.sh
           ./tests/e2e-healthcheck.sh
@@ -280,6 +280,51 @@ jobs:
           mv .env.good .env
           [ "$rc" = 2 ] || { echo "::error::a wrong password was not refused (exit $rc)"; exit 1; }
           echo "a wrong password: refused, exit 2"
+
+      - name: The health check answers again after a map change
+        # A changelevel silences A2S_INFO while the next map loads. The check
+        # must answer again within two minutes, on the new map, and Docker's
+        # status (three misses at a 60-second interval) must stay healthy.
+        run: |
+          cid="$($COMPOSE ps -q tf2-server)"
+          docker exec "$cid" bash /healthcheck.sh 27015
+          tools/rcon.sh changelevel ctf_2fort >/dev/null
+          t0=$SECONDS; misses=0; ok=""
+          while [ $((SECONDS - t0)) -lt 120 ]; do
+            if docker exec "$cid" bash /healthcheck.sh 27015 >/dev/null 2>&1; then
+              [ $((SECONDS - t0)) -ge 15 ] && { ok=1; break; }
+            else
+              misses=$((misses + 1))
+            fi
+            sleep 2
+          done
+          map="$(tools/rcon.sh status | sed -n 's/^map *: *\([^ ]*\).*/\1/p')"
+          s="$(docker inspect "$cid" --format '{{.State.Health.Status}}')"
+          echo "after changelevel: map ${map:-?}, $misses missed checks, answering at $((SECONDS - t0))s, docker health: $s"
+          [ "$ok" = 1 ] || { echo "::error::the game did not answer again within two minutes of the map change"; exit 1; }
+          [ "$map" = ctf_2fort ] || { echo "::error::the map did not change, so this proved nothing"; exit 1; }
+          [ "$s" = healthy ] || { echo "::error::docker called it $s across a map change"; exit 1; }
+
+      - name: Plant - a stopped game keeps its process, and the check goes red
+        # The check up to v2.0.4 looked for srcds_linux64 in /proc. SIGSTOP
+        # leaves the process there and the game deaf: that check must still
+        # pass and this one fail; after SIGCONT this one passes again.
+        run: |
+          cid="$($COMPOSE ps -q tf2-server)"
+          # shellcheck disable=SC2016  # expanded by the container's shell
+          pid="$(docker exec "$cid" sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = srcds_linux64 ] && echo "${p#/proc/}"; done' | head -1)"
+          [ -n "$pid" ] || { echo "::error::no srcds_linux64 process to stop"; exit 1; }
+          docker exec "$cid" sh -c "kill -STOP $pid"
+          o=0; docker exec "$cid" sh -c "grep -qsE '^srcds_linux(64)?\$' /proc/[0-9]*/comm" || o=$?
+          n=0; docker exec "$cid" bash /healthcheck.sh 27015 || n=$?
+          docker exec "$cid" sh -c "kill -CONT $pid"
+          echo "game stopped: the old check exits $o, the new one $n"
+          [ "$o" = 0 ] && [ "$n" = 1 ] || { echo "::error::expected the old check to pass (0) and the new one to fail (1)"; exit 1; }
+          for _ in $(seq 1 15); do
+            docker exec "$cid" bash /healthcheck.sh 27015 && exit 0
+            sleep 2
+          done
+          echo "::error::the game did not answer again after SIGCONT"; exit 1
 
       - name: Plant - a stale version turns the check red
         # The version an August 2026 image carried, and an older build in the

@@ -112,6 +112,8 @@ services:
       - tf2-server-game:/data
       - ./scripts/start-server.sh:/start-server.sh:ro
       - ./scripts/update-game.sh:/update-game.sh:ro
+      # The health check: A2S_INFO to the game port (see healthcheck: below).
+      - ./tools/healthcheck.sh:/healthcheck.sh:ro
       # Linked into tf/cfg and tf/custom by scripts/start-server.sh.
       - ./server.cfg:/config/server.cfg:ro
       - ./mapcycle.txt:/config/mapcycle.txt:ro
@@ -120,16 +122,20 @@ services:
       # local client with `nav_generate` and drop the .nav files here.
       - ./navs:/config/navs:ro
     healthcheck:
-      # ANCHORED, BECAUSE THE WRAPPER IS ALSO CALLED srcds. Two commands run
-      # here: `srcds_linux64`, the game, and `srcds_run_64`, the script that
-      # restarts it when it exits. A check for the substring `srcds` is
-      # satisfied by either, so the game can crash and leave the wrapper
-      # standing while the container reports healthy — and docker does not
-      # restart an unhealthy container by itself, so nothing else catches it.
-      # tests/e2e-healthcheck.sh proves the distinction against a real
-      # container: the anchored form goes red with only the wrapper left, and
-      # the substring form stays green.
-      test: ["CMD-SHELL", "grep -qsE '^srcds_linux(64)?$' /proc/[0-9]*/comm"]
+      # THE GAME'S OWN ANSWER, NOT ITS PROCESS. tools/healthcheck.sh sends
+      # A2S_INFO, the query every server browser sends, to the game port and is
+      # healthy only on the engine's reply. Up to v2.0.4 this looked for
+      # srcds_linux64 in /proc: a hung or stopped game keeps its process, and
+      # on Docker Engine 29.4.2 Black Mesa's srcds ran with no socket at all
+      # and stayed healthy. An empty server hibernates and logs nothing for
+      # hours, and still answers, so the log is not read either. A map change
+      # silences it for seconds; the check tries twice and Docker allows three
+      # misses at this interval. Each check ends within 9 seconds.
+      # It asks from inside the container: it does not prove the port is
+      # published on the host or open in a firewall.
+      # tests/e2e-healthcheck.sh runs it in the pinned image; CI stops the real
+      # game's process and requires it to go red.
+      test: ["CMD", "bash", "/healthcheck.sh", "${TF2_SERVER_PORT:-27015}"]
       interval: 60s
       timeout: 10s
       retries: 3

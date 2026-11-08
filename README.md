@@ -17,7 +17,7 @@ docker compose -f tf2-server-docker-compose.yml -p tf2 up -d
 
 ```bash
 docker compose -p tf2 logs -f tf2-server      # the download, "tf2-update: ...", then srcds
-docker compose -p tf2 ps                      # healthy once srcds is up
+docker compose -p tf2 ps                      # healthy once the game answers A2S_INFO
 tools/steam-uptodate.sh --check               # what Steam says about it
 ```
 
@@ -31,7 +31,7 @@ tools/steam-uptodate.sh --check               # what Steam says about it
 
 **Nothing is mounted inside the game directory, and Docker is not given a working directory there.** Docker creates both, inside the volume, as root. The first 2.0 candidate had `working_dir: /data/tf2`, so on a fresh volume the game directory belonged to root before SteamCMD ran; SteamCMD, as uid 1000, installed all 15 GB into its own library instead and printed "Success! App '232250' fully installed." anyway. `scripts/update-game.sh` refuses a directory it cannot write, and `server.cfg`, `mapcycle.txt` and `navs/` are mounted under `/config` and linked into place after every update.
 
-**The health check is anchored, because the wrapper is also called srcds.** Two commands run in this container: `srcds_linux64`, the game, and `srcds_run_64`, the script that restarts it. A check for the substring `srcds` is satisfied by either, so the game can crash and leave the wrapper standing while the container reports healthy — and docker does not restart an unhealthy container on its own, so nothing else catches it either. `tests/e2e-healthcheck.sh` proves the distinction against a real container: with the game killed, the anchored form goes red and the substring form stays green.
+**The health check asks the game, not its process.** `tools/healthcheck.sh` sends A2S_INFO, the query every server browser sends, to the game port and is healthy only on the engine's reply. Up to v2.0.4 it looked for `srcds_linux64` in `/proc`: a hung or stopped game keeps its process, and on Docker Engine 29.4.2 Black Mesa's server ran with no socket at all and stayed healthy. The log is not read either: an empty server hibernates and writes nothing for hours, and still answers. A map change silences it for seconds; one check tries twice, and Docker allows three misses at a 60-second interval. Each check ends within 9 seconds, inside the 10 Docker gives it. **It asks from inside the container**, at the address the game is bound to: healthy proves the server answers there, not that the port is published on the host or open in your firewall. Check that from outside, with a server browser or `tools/steam-uptodate.sh --check`.
 
 **The hostname is in server.cfg, not on the command line.** The launcher drops everything after a `|` in an argument. A name like `Casual | 24/7` passed through `.env` arrived as `Casual`, and nothing said so.
 
@@ -114,6 +114,8 @@ CI installs the game from Steam and boots it on every push, the way a first star
 
 - asks Steam about the version the server reports, with `tools/steam-uptodate.sh --check`, and fails unless Steam calls it current;
 - sends `status` over rcon and needs the hostname line back, and a wrong password refused;
+- changes the map over rcon and needs the health check to answer again on the new map, with Docker's status healthy throughout;
+- **stops the game process** with SIGSTOP: the process stays, the old `/proc` check still passes, and the health check must fail; after SIGCONT it must pass again;
 - **plants a stale server**: the August image's version, 10828683, written into `steam.inf` and an older build into the app manifest, and the check must call it out of date;
 - runs `tools/steam-uptodate.sh` for real against that server, and needs it to update the game with SteamCMD and Steam to agree afterwards.
 
@@ -124,7 +126,7 @@ Without a game:
 - `tests/steamcmd-offline.sh` feeds `scripts/update-game.sh` the two texts SteamCMD prints under Docker Engine 29.4.2, and needs the script to name that release; a SteamCMD that answers nothing at all must not be blamed on Docker.
 - `tests/read-whole.sh` rewrites the script's own file in place under a running copy, with and without its braces.
 - `tests/timers.sh` checks the timer against the night the clocks went back.
-- `tests/e2e-healthcheck.sh` runs five assertions against a real container: the anchored check is green with the game running, the substring check is green too, and after the game is killed the anchored one goes red while the substring one stays green with the wrapper still standing.
+- `tests/e2e-healthcheck.sh` runs the health check in the pinned image against a stand-in that answers A2S_INFO, answers after a challenge, stays silent, or is not there: healthy, healthy, unhealthy within 9 seconds, unhealthy.
 
 All of it alongside shell and workflow linting, a Trivy scan of the pinned image, and a daily check that the pin still resolves to what upstream publishes.
 
