@@ -231,6 +231,10 @@ jobs:
           done
           echo "::error::the server never reported healthy"
           $COMPOSE logs --tail 80
+          echo "--- the health check's own words, last runs"
+          docker inspect "$cid" --format '{{range .State.Health.Log}}exit {{.ExitCode}}: {{.Output}}{{end}}' | tail -c 2000
+          echo "--- UDP sockets in the container"
+          docker exec "$cid" cat /proc/net/udp
           exit 1
 
       - name: Steam calls the server current

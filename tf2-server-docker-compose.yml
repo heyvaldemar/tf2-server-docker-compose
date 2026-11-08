@@ -130,7 +130,7 @@ services:
       # and stayed healthy. An empty server hibernates and logs nothing for
       # hours, and still answers, so the log is not read either. A map change
       # silences it for seconds; the check tries twice and Docker allows three
-      # misses at this interval. Each check ends within 9 seconds.
+      # misses at this interval. Each check ends within 7 seconds.
       # It asks from inside the container: it does not prove the port is
       # published on the host or open in a firewall.
       # tests/e2e-healthcheck.sh runs it in the pinned image; CI stops the real
