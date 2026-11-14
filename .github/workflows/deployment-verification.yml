@@ -122,6 +122,14 @@ jobs:
       - name: The Steam check, every branch, against stubbed answers
         run: bash tests/steam-uptodate.sh
 
+      - name: Restarts said once, Docker's and srcds_run's
+        # Real containers: one that crashes under Docker's restart policy, one
+        # killed for memory, and one whose game process dies and comes back
+        # inside it, as srcds_run brings it back. tools/steam-uptodate.sh says
+        # each once, with the exit code or the crash line, and exits 1 at
+        # three in a day.
+        run: bash tests/restarts.sh
+
       - name: Docker makes the game directory root's, and the update refuses it
         # A container created with working_dir inside the volume leaves that
         # directory owned by root; SteamCMD handed one it cannot write
@@ -161,6 +169,11 @@ jobs:
       contents: read
     env:
       COMPOSE: docker compose -f tf2-server-docker-compose.yml -p tf2
+      # tests/secret-probe.sh: the game server token and the RCON password
+      # each get a value of their own, and neither may reach docker compose
+      # logs, a command line in the container or the host's ps.
+      PROBE_PROJECT: tf2
+      PROBE_EXPECT: TF2_SERVER_STEAM_TOKEN TF2_SERVER_RCON_PASSWORD
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -200,8 +213,10 @@ jobs:
         run: |
           sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
           # Two different random secrets, so the command-line check below
-          # looks for values nothing else on the runner could hold.
-          sed -i -E "s/^TF2_SERVER_RCON_PASSWORD=.*/TF2_SERVER_RCON_PASSWORD=$(openssl rand -hex 16)/; s/^TF2_SERVER_STEAM_TOKEN=.*/TF2_SERVER_STEAM_TOKEN=$(openssl rand -hex 16)/" .env
+          # looks for values nothing else on the runner could hold:
+          # tests/secret-probe.sh plant writes them by awk through its
+          # environment, never on a command line, and keeps them for the probe.
+          tests/secret-probe.sh plant
           start=$(date +%s)
           $COMPOSE up -d
           # The server's start script downloads the game before srcds; its
@@ -225,7 +240,7 @@ jobs:
           for _ in $(seq 1 60); do
             s="$(docker inspect "$cid" --format '{{.State.Health.Status}}' 2>/dev/null || echo none)"
             echo "health: $s"
-            [ "$s" = healthy ] && exit 0
+            if [ "$s" = healthy ]; then tests/secret-probe.sh check "first start"; exit $?; fi
             [ "$s" = unhealthy ] && break
             sleep 10
           done
@@ -330,6 +345,57 @@ jobs:
           done
           echo "::error::the game did not answer again after SIGCONT"; exit 1
 
+      - name: The rcon client, watched - and after a restart, the probe looks again
+        run: |
+          tests/secret-probe.sh during "rcon status" tools/rcon.sh status
+          cid="$($COMPOSE ps -q tf2-server)"
+          $COMPOSE restart tf2-server >/dev/null
+          for _ in $(seq 1 90); do docker exec "$cid" bash /healthcheck.sh 27015 >/dev/null 2>&1 && break; sleep 10; done
+          docker exec "$cid" bash /healthcheck.sh 27015
+          tests/secret-probe.sh check "after a restart"
+
+      - name: The probe sees what it looks for - a canary in a log and on two command lines
+        run: tests/secret-probe.sh selftest
+
+      - name: A crash - srcds_run brings the game back inside its container, and the timer says so once
+        # The health check runs inside the container and srcds_run starts a
+        # new game seconds after one dies: green again, and Docker counts no
+        # restart. tools/steam-uptodate.sh runs on the host and says it, from
+        # the game process's start time. Here: a run that writes it down,
+        # SIGSEGV to the game, the game answering again, a run that must say
+        # it and one that must not.
+        run: |
+          cid="$($COMPOSE ps -q tf2-server)"
+          rc=0; out="$(tools/steam-uptodate.sh 2>&1)" || rc=$?
+          echo "before the crash: exit $rc: $out"
+          [ "$rc" = 0 ] || { echo "::error::the timer was not green before the crash"; exit 1; }
+          $COMPOSE exec -T tf2-server pkill -SEGV -x srcds_linux64
+          echo "SIGSEGV to srcds_linux64"
+          sleep 5
+          for _ in $(seq 1 60); do docker exec "$cid" bash /healthcheck.sh 27015 >/dev/null 2>&1 && break; sleep 5; done
+          docker exec "$cid" bash /healthcheck.sh 27015
+          echo "after: $(docker inspect -f 'restarts={{.RestartCount}} started={{.State.StartedAt}}' "$cid")"
+          rc=0; out="$(tools/steam-uptodate.sh 2>&1)" || rc=$?
+          echo "after the crash: exit $rc: $out"
+          if [ "$rc" != 0 ] || ! grep -q -E "the game restarted inside its container since|the server restarted 1 time since" <<<"$out"; then
+            echo "::error::the timer did not report the crash once"; exit 1
+          fi
+          rc=0; out="$(tools/steam-uptodate.sh 2>&1)" || rc=$?
+          echo "the next run: exit $rc: $out"
+          if [ "$rc" != 0 ] || grep -q "restarted" <<<"$out"; then echo "::error::the timer reported the same crash twice"; exit 1; fi
+          rm -f .steam-uptodate-*
+
+      - name: A stop - timed, with its exit code (tests/clean-stop.sh; no world to save)
+        env:
+          CLEAN_STOP_PROJECT: tf2
+          CLEAN_STOP_COMPOSE: tf2-server-docker-compose.yml
+        run: |
+          tests/clean-stop.sh tf2-server -
+          $COMPOSE up -d tf2-server >/dev/null
+          cid="$($COMPOSE ps -q tf2-server)"
+          for _ in $(seq 1 90); do docker exec "$cid" bash /healthcheck.sh 27015 >/dev/null 2>&1 && break; sleep 10; done
+          docker exec "$cid" bash /healthcheck.sh 27015
+
       - name: Plant - a stale version turns the check red
         # The version an August 2026 image carried, and an older build in the
         # app manifest: what a server left behind by Valve looks like. Only
@@ -361,4 +427,6 @@ jobs:
 
       - name: Stop
         if: always()
-        run: $COMPOSE down -v --remove-orphans
+        run: |
+          $COMPOSE down -v --remove-orphans
+          rm -f "$RUNNER_TEMP/secret-probe.values" .env

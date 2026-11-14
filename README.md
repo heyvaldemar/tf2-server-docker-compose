@@ -81,6 +81,8 @@ Up to v1 this said `docker compose -p tf2 exec tf2-server rcon status`. The imag
 
 "Says so" is one line in the journal every run, and, when `STEAM_UPTODATE_NOTIFY` is set, a message on its stdin the first time something new happens: a webhook, mail, anything that reads stdin. The service file has an example.
 
+**A crash is reported by the timer.** The health check runs inside the container, and a game that dies is back within seconds: Valve's `srcds_run`, the server's wrapper, starts it again, Docker counts no restart, and the check misses a few answers at most. On each run `tools/steam-uptodate.sh` writes down when the game process (`srcds_linux64`) started, and the container's name, id and Docker's restart count (`RestartCount`). A game that came back inside its container is said once: "the game restarted inside its container since <time>: srcds_run brought it back, and Docker saw no restart", with the crash line and `srcds_run`'s own from the log. A restart Docker did is said once the same way, with the exit code and the reason from Docker's die and oom events. Three in 24 hours exit 1, so the timer shows in `systemctl --failed`. Measured on the real server: SIGSEGV to `srcds_linux64`, `srcds_run` restarted it, the container's restart count stayed 0, and the next run said it once.
+
 ```bash
 # edit the two paths in the service file to where this repository is checked out
 sudo cp systemd/steam-uptodate.service systemd/steam-uptodate.timer /etc/systemd/system/
@@ -117,11 +119,16 @@ CI installs the game from Steam and boots it on every push, the way a first star
 - changes the map over rcon and needs the health check to answer again on the new map, with Docker's status healthy throughout;
 - **stops the game process** with SIGSTOP: the process stays, the old `/proc` check still passes, and the health check must fail; after SIGCONT it must pass again;
 - **plants a stale server**: the August image's version, 10828683, written into `steam.inf` and an older build into the app manifest, and the check must call it out of date;
+- gives the game server token and the RCON password a value each and looks for them in `docker compose logs`, on every command line in the container and in the host's `ps`, after the first start, while the rcon client runs and after a restart, naming the place, never the value (`tests/secret-probe.sh`);
+- kills the game with SIGSEGV and needs the timer to say once that it restarted, and the next run to say nothing;
+- times a `docker compose stop` and reads its exit code (`tests/clean-stop.sh`). Measured: 30 seconds of the 30-second grace period and exit 137, Docker's SIGKILL, because `srcds_run`, process 1 here, does not pass SIGTERM on. Team Fortress 2 keeps no world, so nothing is lost; a stop or restart simply waits out the grace period;
 - runs `tools/steam-uptodate.sh` for real against that server, and needs it to update the game with SteamCMD and Steam to agree afterwards.
 
 Without a game:
 
 - `tests/steam-uptodate.sh` drives every branch of the script against stubbed A2S and Steam answers, then runs four copies with one rule taken out each (the player count, the proof by Steam, the host lock, the daily limit) and sees each do what the rule prevents.
+- `tests/restarts.sh` runs the timer against real containers: one that crashes under Docker's restart policy, one killed for memory, and one whose game process dies and comes back inside it, as `srcds_run` brings it back; each is said once, and three in a day exit 1;
+- `tests/e2e-healthcheck.sh` includes a stand-in whose challenge holds a newline byte: the request must go out as one 29-byte datagram;
 - `tests/unwritable-game-dir.sh` creates a container, never started, with `working_dir: /data/tf2` on a fresh volume, as the first 2.0 candidate's server was, and finds `/data/tf2` owned by root; `scripts/update-game.sh` then refuses it before calling SteamCMD. A plant without the check hands SteamCMD that directory, which is what made the real one install 15 GB elsewhere and print "Success!" ([the log](docs/evidence/steamcmd-unwritable-dir.md)).
 - `tests/steamcmd-offline.sh` feeds `scripts/update-game.sh` the two texts SteamCMD prints under Docker Engine 29.4.2, and needs the script to name that release; a SteamCMD that answers nothing at all must not be blamed on Docker.
 - `tests/read-whole.sh` rewrites the script's own file in place under a running copy, with and without its braces.
