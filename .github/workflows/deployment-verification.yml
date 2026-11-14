@@ -389,8 +389,12 @@ jobs:
         env:
           CLEAN_STOP_PROJECT: tf2
           CLEAN_STOP_COMPOSE: tf2-server-docker-compose.yml
+        # srcds_run used to be process 1 and ignore SIGTERM (30 s of 30, exit
+        # 137, run 43618442929); with Docker's init the stop must not need
+        # Docker's SIGKILL.
         run: |
-          tests/clean-stop.sh tf2-server -
+          out="$(tests/clean-stop.sh tf2-server -)"; echo "$out"
+          if grep -q 'Docker sent SIGKILL' <<<"$out"; then echo "::error::the stop still ended in Docker's SIGKILL"; exit 1; fi
           $COMPOSE up -d tf2-server >/dev/null
           cid="$($COMPOSE ps -q tf2-server)"
           for _ in $(seq 1 90); do docker exec "$cid" bash /healthcheck.sh 27015 >/dev/null 2>&1 && break; sleep 10; done

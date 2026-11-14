@@ -27,6 +27,14 @@ services:
     # moved on. A restart is therefore an update, which is how
     # tools/steam-uptodate.sh updates an empty server that has fallen behind.
     entrypoint: ["/bin/sh", "/start-server.sh"]
+    # A STOP REACHES THE GAME. scripts/start-server.sh ends in exec
+    # srcds_run_64, a bash script, which made it process 1, and process 1
+    # with no handler for SIGTERM ignores it: every stop, restart and update
+    # waited out the grace period and ended in Docker's SIGKILL (30 s of 30,
+    # exit 137, CI run 43618442929). Docker's init (tini) is process 1 now,
+    # and with TINI_KILL_PROCESS_GROUP below it hands SIGTERM to srcds_run
+    # and srcds together.
+    init: true
     # The uid the image's /data belongs to, so a new volume, which takes its
     # owner from the image's directory on first mount, is this user's.
     user: "1000:1000"
@@ -71,6 +79,8 @@ services:
     # libraries" on a host with more than one interface, with no error. This
     # container gets a bridge namespace of its own, which is why it starts.
     environment:
+      # tini (init: true above) signals the whole process group.
+      TINI_KILL_PROCESS_GROUP: "1"
       # Steam's client library is looked for in ~/.steam/sdk64;
       # scripts/update-game.sh puts it there, in the game directory.
       HOME: /data/tf2
@@ -145,8 +155,8 @@ services:
       # The start period only forgives failures: a server that comes up in a
       # minute is healthy in a minute.
       start_period: ${TF2_SERVER_START_PERIOD:-60m}
-    # srcds writes its state on the way out. Ten seconds and a SIGKILL is
-    # enough to lose the last round.
+    # The stop takes a second or two with init above (tests/clean-stop.sh);
+    # the grace period is the ceiling, not the wait.
     stop_grace_period: ${TF2_SERVER_STOP_GRACE_PERIOD:-30s}
     restart: unless-stopped
     logging:

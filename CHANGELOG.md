@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Fixed
+
+- **A stop no longer waits out the grace period.** `scripts/start-server.sh` ends in `exec srcds_run_64`, a bash script, which made it the container's process 1, and process 1 with no handler for SIGTERM ignores it: every stop, restart and update waited the full 30 seconds and ended in Docker's SIGKILL (`tests/clean-stop.sh`: 30 s of 30, exit 137, [run 43618442929](https://github.com/heyvaldemar/tf2-server-docker-compose/actions/runs/43618442929)). The compose file now runs Docker's init (tini) as process 1, with `TINI_KILL_PROCESS_GROUP`, so SIGTERM reaches `srcds_run` and the game together. Team Fortress 2 keeps no world, so nothing was lost, only the wait. CI now fails a stop that needs Docker's SIGKILL: 1 s of 30, exit 143 ([run 43622803892](https://github.com/heyvaldemar/tf2-server-docker-compose/actions/runs/43622803892)), and the crash watch still says a crash srcds_run brings back.
+- **The secret probe's excerpt of a leaked line replaces Steam IDs and addresses too.** Should the probe ever find a value, the line it prints had every planted value replaced by its name, but a Steam ID or an address in the same line was printed as it was; a stranger can join a listed server while CI runs. Both are now replaced, and the selftest proves it on a line that holds all of them.
+- **The stubbed container in the timer's tests has a neutral name** (`/game-server`). Tests only.
 
 ## [2.2.0] - 2026-11-14
 

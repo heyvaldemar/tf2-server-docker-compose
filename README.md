@@ -121,7 +121,7 @@ CI installs the game from Steam and boots it on every push, the way a first star
 - **plants a stale server**: the August image's version, 10828683, written into `steam.inf` and an older build into the app manifest, and the check must call it out of date;
 - gives the game server token and the RCON password a value each and looks for them in `docker compose logs`, on every command line in the container and in the host's `ps`, after the first start, while the rcon client runs and after a restart, naming the place, never the value (`tests/secret-probe.sh`);
 - kills the game with SIGSEGV and needs the timer to say once that it restarted, and the next run to say nothing;
-- times a `docker compose stop` and reads its exit code (`tests/clean-stop.sh`). Measured: 30 seconds of the 30-second grace period and exit 137, Docker's SIGKILL, because `srcds_run`, process 1 here, does not pass SIGTERM on. Team Fortress 2 keeps no world, so nothing is lost; a stop or restart simply waits out the grace period;
+- times a `docker compose stop`, reads its exit code, and fails if Docker had to send SIGKILL (`tests/clean-stop.sh`). Up to v2.2.0 `srcds_run` was process 1 and ignored SIGTERM, so every stop waited the 30-second grace period and was killed; Docker's init is process 1 now and hands SIGTERM to the game's whole process group. Team Fortress 2 keeps no world, so nothing was lost, only the wait;
 - runs `tools/steam-uptodate.sh` for real against that server, and needs it to update the game with SteamCMD and Steam to agree afterwards.
 
 Without a game:
