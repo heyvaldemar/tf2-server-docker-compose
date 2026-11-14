@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Changed
+
+- **CI logs the server into Steam with a real game server token.** With the repository secret `TF2_CI_STEAM_TOKEN` (a token on App ID 440 for this CI alone), the boot job starts the server with it, masked and kept by the secret probe like any planted value, and proves Steam took it: a persistent gameserver Steam ID in the log, account type 3 in the server's own A2S answer (anonymous is 4), and Steam's list of servers at the runner's public address holding a TF2 server with that SteamID ([run 43631370245](https://github.com/heyvaldemar/tf2-server-docker-compose/actions/runs/43631370245)). Addresses and ids are left out of what CI prints. Without the secret (a fork, a Dependabot pull request) the server runs anonymous, as before.
 
 ## [2.2.2] - 2026-11-14
 

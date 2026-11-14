@@ -210,10 +210,27 @@ jobs:
           docker info --format '{{.SecurityOptions}}'
 
       - name: First start - the game is downloaded into the volume
+        env:
+          STEAM_TOKEN: ${{ secrets.TF2_CI_STEAM_TOKEN }}
         run: |
           sed -E 's/^([A-Z0-9_]+)=$/\1=ci-placeholder/' .env.example > .env
-          # Two different random secrets, so the command-line check below
-          # looks for values nothing else on the runner could hold:
+          # A REAL GAME SERVER TOKEN when the repository secret exists (one on
+          # App ID 440, for this CI alone): it goes into .env through awk's
+          # environment, never a command line, the probe keeps it and looks
+          # for it like any planted value, and a step below proves Steam took
+          # it. Without the secret (a fork, a Dependabot pull request) the
+          # token is random and the server runs anonymous, as it always did.
+          if [ -n "$STEAM_TOKEN" ]; then
+            printf '::add-mask::%s\n' "$STEAM_TOKEN"
+            awk '/^TF2_SERVER_STEAM_TOKEN=/ { print "TF2_SERVER_STEAM_TOKEN=" ENVIRON["STEAM_TOKEN"]; next } { print }' .env > .env.new && mv .env.new .env
+            export PROBE_KEEP=TF2_SERVER_STEAM_TOKEN
+            echo "TF2_GSLT=1" >> "$GITHUB_ENV"
+            echo "a game server token from the repository secret"
+          else
+            echo "::notice::no TF2_CI_STEAM_TOKEN secret: a random token, and the server runs anonymous"
+          fi
+          # Random values for the rest, so the command-line check below looks
+          # for values nothing else on the runner could hold:
           # tests/secret-probe.sh plant writes them by awk through its
           # environment, never on a command line, and keeps them for the probe.
           tests/secret-probe.sh plant
@@ -265,6 +282,84 @@ jobs:
           $COMPOSE logs --tail 80 tf2-server
           exit 3
 
+      - name: The game server token logs the server into Steam, and Steam lists it
+        # Only with the repository secret. The server's own SteamID, in its A2S
+        # answer, must be a persistent game server's (account type 3), which
+        # only a game server token gives (anonymous is 4); and Steam's list of
+        # servers at the runner's public address must hold a TF2 server with
+        # that SteamID. Addresses and ids are left out of what is printed.
+        if: env.TF2_GSLT == '1'
+        run: |
+          logs="$(mktemp)"
+          redact() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ip>/g; s/\[[AGU]:[0-9]:[0-9]+(:[0-9]+)?\]/[<id>]/g; s/[0-9]{17}/<id>/g'; }
+          # The logon can come after the server first answers A2S (measured:
+          # absent at "current", present minutes later), so it is waited for.
+          for _ in $(seq 1 36); do
+            $COMPOSE logs --no-log-prefix tf2-server > "$logs"
+            grep -a -q 'gameserver Steam ID' "$logs" && break
+            sleep 5
+          done
+          grep -a -E 'Connection to Steam servers|gameserver Steam ID|VAC secure mode' "$logs" | redact | head -5
+          grep -a -q 'Assigned persistent gameserver Steam ID' "$logs" \
+            || { echo "::error::no persistent gameserver Steam ID in the log: Steam did not take the token"; grep -a -i -E 'steam|token' "$logs" | redact | tail -10; exit 1; }
+          # The runner's public address, handed to Python without being
+          # printed: TF2 names it neither in its log nor, measured, in rcon
+          # status (run 43631370245), so it comes from AWS's echo unless
+          # status names it.
+          pub="$(tools/rcon.sh status | sed -n -E 's/.*public ip: ([0-9.]+).*/\1/p' | head -1)"
+          if [ -z "$pub" ]; then
+            echo "status names no public address; the runner's, as AWS's echo sees it"
+            pub="$(curl -fsS --max-time 10 https://checkip.amazonaws.com || true)"
+          fi
+          python3 - "$logs" "$(sed -n 's/^TF2_SERVER_PORT=//p' .env)" "$pub" <<'PY'
+          import json, re, socket, struct, sys, time, urllib.request
+          logf, port, pub = sys.argv[1], int(sys.argv[2] or 27015), sys.argv[3]
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3)
+          q = b"\xff\xff\xff\xffTSource Engine Query\x00"
+          for _ in range(5):
+              try:
+                  s.sendto(q, ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
+                  if d[4:5] == b"A":
+                      s.sendto(q + d[5:9], ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
+                  break
+              except OSError:
+                  continue
+          else:
+              sys.exit("no A2S answer")
+          b = d[6:]; i = 0
+          for _ in range(4):
+              i = b.index(b"\x00", i) + 1
+          i += 2 + 7
+          i = b.index(b"\x00", i) + 1
+          edf = b[i] if i < len(b) else 0; i += 1
+          if edf & 0x80:
+              i += 2
+          sid = struct.unpack("<Q", b[i:i + 8])[0] if edf & 0x10 else None
+          kind = (sid >> 52) & 0xF if sid else None
+          print(f"A2S: the server's SteamID is account type {kind} (3 is a persistent game server, 4 anonymous)")
+          if kind != 3:
+              sys.exit("the server is not logged into Steam with the game server token")
+          ips = [pub] if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", pub) else []
+          ips += re.findall(r"Public IP is (\d{1,3}(?:\.\d{1,3}){3})", open(logf, errors="replace").read())
+          if not ips:
+              sys.exit("no public address: not from rcon status, AWS's echo or the log")
+          url = "https://api.steampowered.com/ISteamApps/GetServersAtAddress/v1/?addr=" + ips[0]
+          seen, end = None, time.time() + 300
+          while not seen and time.time() < end:
+              try:
+                  with urllib.request.urlopen(url, timeout=15) as r:
+                      servers = json.load(r).get("response", {}).get("servers", [])
+                  seen = next((x for x in servers if x.get("appid") == 440 and str(x.get("steamid")) == str(sid)), None)
+              except Exception as e:
+                  print(f"Steam's list did not answer ({type(e).__name__}); asking again")
+              if not seen:
+                  time.sleep(15)
+          if not seen:
+              sys.exit("Steam lists no TF2 server with this server's SteamID at the runner's public address")
+          print(f"Steam lists it at the runner's public address: appid 440, game port {seen.get('gameport')}, secure {seen.get('secure')}, with the server's own SteamID")
+          PY
+          rm -f "$logs"
+
       - name: Neither the token nor the RCON password is on a command line
         # srcds kept both in its arguments for as long as it ran, where every
         # user on the host reads them with ps; scripts/start-server.sh writes
@@ -291,7 +386,10 @@ jobs:
 
       - name: rcon answers, and refuses a wrong password
         run: |
-          out="$(tools/rcon.sh status)"; printf '%s\n' "$out" | head -5
+          # Addresses and ids out of what is printed: with a game server
+          # token, status names the server's SteamID.
+          out="$(tools/rcon.sh status)"; printf '%s\n' "$out" | head -5 \
+            | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ip>/g; s/\[[AGU]:[0-9]:[0-9]+(:[0-9]+)?\]/[<id>]/g; s/[0-9]{17}/<id>/g'
           grep -q '^hostname' <<<"$out" || { echo "::error::status did not return the hostname line"; exit 1; }
           cp .env .env.good
           sed -i 's/^TF2_SERVER_RCON_PASSWORD=.*/TF2_SERVER_RCON_PASSWORD=not-the-password/' .env
