@@ -14,7 +14,7 @@
 # and carries no version; the digest is the version, the daily freshness job
 # goes red when it moves, and the pin moves deliberately.
 x-images:
-  tf2-server: &tf2-server-image ${TF2_SERVER_IMAGE_TAG:-gameservermanagers/gameserver:${TF2_SERVER_IMAGE_VERSION:-tf2@sha256:fe4781098b06d720bd2b6b87158c91b43dd2c915fa797b388b435812a06d740a}}
+  tf2-server: &tf2-server-image ${TF2_SERVER_IMAGE_TAG:-gameservermanagers/gameserver:${TF2_SERVER_IMAGE_VERSION:-tf2@sha256:7fda92c208cd5a40f3b172b8925979d70c4c9dd8e55229bfe67b31cadb00b7d7}}
 
 services:
   tf2-server:
