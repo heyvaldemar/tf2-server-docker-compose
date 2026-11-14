@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [2.2.2] - 2026-11-14
+
 ### Fixed
 
 - **A kill for memory is named even when Docker stores its oom event late.** On a GitHub runner (Docker 29.4.2) the oom event of 1 kill in 20 was not there when the die event was, and was ten seconds later ([run 43623563645 in l4d2-server-docker-compose](https://github.com/heyvaldemar/l4d2-server-docker-compose/actions/runs/43623563645)), so the timer called a kill for memory a plain SIGKILL. A 137 with no oom event yet is now read again, for up to ten seconds (the same timer: 20 of 20 named, [run 43624152790](https://github.com/heyvaldemar/l4d2-server-docker-compose/actions/runs/43624152790)).
@@ -148,7 +152,8 @@ s check is what notices a rebuild.
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.1.0...v2.1.1
