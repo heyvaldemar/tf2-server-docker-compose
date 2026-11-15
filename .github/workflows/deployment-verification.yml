@@ -165,6 +165,16 @@ jobs:
     # real SteamCMD and the real Steam, not described.
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    # ONE TOKEN, ONE SERVER. Two runs logged in with the same game server
+    # token at once would knock each other off Steam, so the runs that may
+    # hold it wait for each other instead of overlapping.
+    # Pull requests that cannot have the token (a fork's, Dependabot's) get a
+    # group of their own: in a shared one, a newer waiting run cancels the
+    # waiting one before it, and a run that never holds the token must not
+    # be able to cancel one that does.
+    concurrency:
+      group: tf2-steam-token-${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) && github.run_id || 'holder' }}
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -283,34 +293,113 @@ jobs:
           exit 3
 
       - name: The game server token logs the server into Steam, and Steam lists it
-        # Only with the repository secret. The server's own SteamID, in its A2S
-        # answer, must be a persistent game server's (account type 3), which
-        # only a game server token gives (anonymous is 4); and Steam's list of
-        # servers at the runner's public address must hold a TF2 server with
-        # that SteamID. Addresses and ids are left out of what is printed.
+        # Only with the repository secret. THE SERVER'S OWN STEAMID SAYS IT,
+        # NOT THE LOG: on this build "Connection to Steam servers successful"
+        # can be missing from a logon that worked (seen on a live server: no
+        # such line, and status a minute later showed the persistent id). So
+        # the SteamID in the server's A2S answer is read until it settles:
+        # account type 3 is a persistent game server, which only a game server
+        # token gives; 4 is anonymous, which means the token never reached the
+        # server and fails the run, as does a token Steam refused. No SteamID
+        # at all within five minutes is Steam's side, not the template's: a
+        # warning that says what the server saw. With the logon, Steam's list
+        # of servers at the runner's public address should hold a TF2 server
+        # with that SteamID. Each run writes "steam-logon:" and
+        # "steam-listed:" into its summary, to be counted. Addresses and ids
+        # are left out of what is printed.
         if: env.TF2_GSLT == '1'
         run: |
           logs="$(mktemp)"
           redact() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ip>/g; s/\[[AGU]:[0-9]:[0-9]+(:[0-9]+)?\]/[<id>]/g; s/[0-9]{17}/<id>/g'; }
-          # The logon can come after the server first answers A2S, and on some
-          # runners it did not come within three minutes (runs 43630557198,
-          # 43632851446, 43652340555; 43629528281 and 43631370245 had it at
-          # once), so it is waited for up to ten, and a miss says what the
-          # server did see.
-          t0=$SECONDS
-          for _ in $(seq 1 120); do
-            $COMPOSE logs --no-log-prefix tf2-server > "$logs"
-            grep -a -q 'gameserver Steam ID' "$logs" && break
-            sleep 5
-          done
-          echo "waited $((SECONDS - t0)) s for the logon"
+          # The runner's public address, handed to Python without being
+          # printed: TF2 names it neither in its log nor, measured, in rcon
+          # status (run 43631370245), so it comes from AWS's echo unless
+          # status names it.
+          pub="$(tools/rcon.sh status | sed -n -E 's/.*public ip: ([0-9.]+).*/\1/p' | head -1)"
+          [ -n "$pub" ] || pub="$(curl -fsS --max-time 10 https://checkip.amazonaws.com || true)"
+          rc=0
+          python3 - "$(sed -n 's/^TF2_SERVER_PORT=//p' .env)" "$pub" <<'PY' || rc=$?
+          import json, os, re, socket, struct, sys, time, urllib.request
+          port, pub = int(sys.argv[1] or 27015), sys.argv[2]
+          def summary(line):
+              print(line)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(line + "\n")
+          def steamid():
+              s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3)
+              q = b"\xff\xff\xff\xffTSource Engine Query\x00"
+              try:
+                  s.sendto(q, ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
+                  if d[4:5] == b"A":
+                      s.sendto(q + d[5:9], ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
+              except OSError:
+                  return None
+              try:
+                  b = d[6:]; i = 0
+                  for _ in range(4):
+                      i = b.index(b"\x00", i) + 1
+                  i += 2 + 7
+                  i = b.index(b"\x00", i) + 1
+                  edf = b[i] if i < len(b) else 0; i += 1
+                  if edf & 0x80:
+                      i += 2
+                  return struct.unpack("<Q", b[i:i + 8])[0] if edf & 0x10 else 0
+              except (ValueError, IndexError, struct.error):
+                  return None
+          t0, sid, kind = time.time(), None, None
+          while time.time() - t0 < 300:
+              sid = steamid()
+              kind = (sid >> 52) & 0xF if sid else None
+              if kind == 3:
+                  break
+              time.sleep(5)
+          waited = int(time.time() - t0)
+          print(f"A2S: the server's SteamID is account type {kind} (3 is a persistent game server, 4 anonymous, None no SteamID), after {waited} s")
+          if kind == 4:
+              summary("steam-logon: anonymous")
+              sys.exit(11)
+          if kind != 3:
+              summary(f"steam-logon: no (no SteamID in {waited} s)")
+              sys.exit(10)
+          summary(f"steam-logon: yes (persistent, after {waited} s)")
+          if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", pub):
+              summary("steam-listed: unknown (no public address from rcon status or AWS's echo)")
+              print("::warning::no public address to ask Steam's list about")
+              sys.exit(0)
+          url = "https://api.steampowered.com/ISteamApps/GetServersAtAddress/v1/?addr=" + pub
+          seen, end = None, time.time() + 300
+          while not seen and time.time() < end:
+              try:
+                  with urllib.request.urlopen(url, timeout=15) as r:
+                      servers = json.load(r).get("response", {}).get("servers", [])
+                  seen = next((x for x in servers if x.get("appid") == 440 and str(x.get("steamid")) == str(sid)), None)
+              except Exception as e:
+                  print(f"Steam's list did not answer ({type(e).__name__}); asking again")
+              if not seen:
+                  time.sleep(15)
+          if not seen:
+              summary("steam-listed: no")
+              print("::warning::Steam lists no TF2 server with this server's SteamID at the runner's public address")
+              sys.exit(0)
+          summary(f"steam-listed: yes (appid 440, game port {seen.get('gameport')}, secure {seen.get('secure')}, the server's own SteamID)")
+          PY
+          $COMPOSE logs --no-log-prefix tf2-server > "$logs"
+          echo "--- the server's own Steam lines, for the record (the SteamID above decides)"
           grep -a -E 'Connection to Steam servers|gameserver Steam ID|VAC secure mode' "$logs" | redact | head -5
-          if ! grep -a -q 'Assigned persistent gameserver Steam ID' "$logs"; then
-            echo "::error::no persistent gameserver Steam ID in the log: Steam did not take the token"
+          if [ "$rc" = 11 ]; then
+            echo "::error::the server logged into Steam anonymously: the game server token did not reach it"
+            rm -f "$logs"; exit 1
+          fi
+          if grep -a -i -q -E 'invalid (game server |logon )?token|token (is )?(invalid|expired|banned)|gslt.*(invalid|expired|banned)' "$logs"; then
+            echo "steam-logon: refused" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::Steam refused the game server token"
+            grep -a -i -E 'token|gslt' "$logs" | redact | tail -5
+            rm -f "$logs"; exit 1
+          fi
+          if [ "$rc" = 10 ]; then
+            echo "::warning::no SteamID from the server within five minutes; Steam's side, not the template's"
             echo "--- the server's Steam lines"
             grep -a -i -E 'steam|token|logon|gslt|connect' "$logs" | redact | tail -25
-            echo "--- secrets.cfg and server.cfg as the server ran them"
-            grep -a -E 'secrets\.cfg|server\.cfg' "$logs" | redact | head -5
             echo "--- the server's UDP and TCP peers (Steam's are on 27015-27050 and 443)"
             cid="$($COMPOSE ps -q tf2-server)"
             docker exec "$cid" sh -c 'cat /proc/net/udp /proc/net/tcp' | python3 -c '
@@ -323,64 +412,9 @@ jobs:
           for k, n in sorted(c.items()):
               print("%3d  %s" % (n, k))
           ' | head -15
-            exit 1
+          elif [ "$rc" != 0 ]; then
+            rm -f "$logs"; exit "$rc"
           fi
-          # The runner's public address, handed to Python without being
-          # printed: TF2 names it neither in its log nor, measured, in rcon
-          # status (run 43631370245), so it comes from AWS's echo unless
-          # status names it.
-          pub="$(tools/rcon.sh status | sed -n -E 's/.*public ip: ([0-9.]+).*/\1/p' | head -1)"
-          if [ -z "$pub" ]; then
-            echo "status names no public address; the runner's, as AWS's echo sees it"
-            pub="$(curl -fsS --max-time 10 https://checkip.amazonaws.com || true)"
-          fi
-          python3 - "$logs" "$(sed -n 's/^TF2_SERVER_PORT=//p' .env)" "$pub" <<'PY'
-          import json, re, socket, struct, sys, time, urllib.request
-          logf, port, pub = sys.argv[1], int(sys.argv[2] or 27015), sys.argv[3]
-          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3)
-          q = b"\xff\xff\xff\xffTSource Engine Query\x00"
-          for _ in range(5):
-              try:
-                  s.sendto(q, ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
-                  if d[4:5] == b"A":
-                      s.sendto(q + d[5:9], ("127.0.0.1", port)); d, _ = s.recvfrom(1400)
-                  break
-              except OSError:
-                  continue
-          else:
-              sys.exit("no A2S answer")
-          b = d[6:]; i = 0
-          for _ in range(4):
-              i = b.index(b"\x00", i) + 1
-          i += 2 + 7
-          i = b.index(b"\x00", i) + 1
-          edf = b[i] if i < len(b) else 0; i += 1
-          if edf & 0x80:
-              i += 2
-          sid = struct.unpack("<Q", b[i:i + 8])[0] if edf & 0x10 else None
-          kind = (sid >> 52) & 0xF if sid else None
-          print(f"A2S: the server's SteamID is account type {kind} (3 is a persistent game server, 4 anonymous)")
-          if kind != 3:
-              sys.exit("the server is not logged into Steam with the game server token")
-          ips = [pub] if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", pub) else []
-          ips += re.findall(r"Public IP is (\d{1,3}(?:\.\d{1,3}){3})", open(logf, errors="replace").read())
-          if not ips:
-              sys.exit("no public address: not from rcon status, AWS's echo or the log")
-          url = "https://api.steampowered.com/ISteamApps/GetServersAtAddress/v1/?addr=" + ips[0]
-          seen, end = None, time.time() + 300
-          while not seen and time.time() < end:
-              try:
-                  with urllib.request.urlopen(url, timeout=15) as r:
-                      servers = json.load(r).get("response", {}).get("servers", [])
-                  seen = next((x for x in servers if x.get("appid") == 440 and str(x.get("steamid")) == str(sid)), None)
-              except Exception as e:
-                  print(f"Steam's list did not answer ({type(e).__name__}); asking again")
-              if not seen:
-                  time.sleep(15)
-          if not seen:
-              sys.exit("Steam lists no TF2 server with this server's SteamID at the runner's public address")
-          print(f"Steam lists it at the runner's public address: appid 440, game port {seen.get('gameport')}, secure {seen.get('secure')}, with the server's own SteamID")
-          PY
           rm -f "$logs"
 
       - name: Neither the token nor the RCON password is on a command line
