@@ -292,18 +292,39 @@ jobs:
         run: |
           logs="$(mktemp)"
           redact() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/<ip>/g; s/\[[AGU]:[0-9]:[0-9]+(:[0-9]+)?\]/[<id>]/g; s/[0-9]{17}/<id>/g'; }
-          # The logon can come after the server first answers A2S (measured:
-          # absent at "current", present minutes later), so it is waited for.
+          # The logon can come after the server first answers A2S, and on some
+          # runners it did not come within three minutes (runs 43630557198,
+          # 43632851446, 43652340555; 43629528281 and 43631370245 had it at
+          # once), so it is waited for up to ten, and a miss says what the
+          # server did see.
           t0=$SECONDS
-          for _ in $(seq 1 36); do
+          for _ in $(seq 1 120); do
             $COMPOSE logs --no-log-prefix tf2-server > "$logs"
             grep -a -q 'gameserver Steam ID' "$logs" && break
             sleep 5
           done
           echo "waited $((SECONDS - t0)) s for the logon"
           grep -a -E 'Connection to Steam servers|gameserver Steam ID|VAC secure mode' "$logs" | redact | head -5
-          grep -a -q 'Assigned persistent gameserver Steam ID' "$logs" \
-            || { echo "::error::no persistent gameserver Steam ID in the log: Steam did not take the token"; grep -a -i -E 'steam|token' "$logs" | redact | tail -10; exit 1; }
+          if ! grep -a -q 'Assigned persistent gameserver Steam ID' "$logs"; then
+            echo "::error::no persistent gameserver Steam ID in the log: Steam did not take the token"
+            echo "--- the server's Steam lines"
+            grep -a -i -E 'steam|token|logon|gslt|connect' "$logs" | redact | tail -25
+            echo "--- secrets.cfg and server.cfg as the server ran them"
+            grep -a -E 'secrets\.cfg|server\.cfg' "$logs" | redact | head -5
+            echo "--- the server's UDP and TCP peers (Steam's are on 27015-27050 and 443)"
+            cid="$($COMPOSE ps -q tf2-server)"
+            docker exec "$cid" sh -c 'cat /proc/net/udp /proc/net/tcp' | python3 -c '
+          import sys, collections
+          c = collections.Counter()
+          for l in sys.stdin:
+              f = l.split()
+              if len(f) > 3 and ":" in f[2] and not f[2].startswith("00000000"):
+                  c["remote port %d, state %s" % (int(f[2].split(":")[1], 16), f[3])] += 1
+          for k, n in sorted(c.items()):
+              print("%3d  %s" % (n, k))
+          ' | head -15
+            exit 1
+          fi
           # The runner's public address, handed to Python without being
           # printed: TF2 names it neither in its log nor, measured, in rcon
           # status (run 43631370245), so it comes from AWS's echo unless
@@ -532,19 +553,5 @@ jobs:
       - name: Stop
         if: always()
         run: |
-          # A CLEAN LOGOFF FROM STEAM, with the real token. A stop by signal
-          # ends srcds without logging off, and the next run, on another
-          # runner, got no logon for as long as it waited (10 and 14 minutes
-          # after the previous run's stop: runs 43630557198, 43632851446),
-          # while a run after one that never logged on got it at once. quit
-          # ends srcds the clean way; srcds_run's pause before it starts the
-          # game again is when the stack comes down.
-          if [ "${TF2_GSLT:-}" = 1 ] && [ -n "$($COMPOSE ps -q tf2-server 2>/dev/null)" ]; then
-            tools/rcon.sh quit >/dev/null 2>&1 || true
-            for _ in $(seq 1 15); do
-              $COMPOSE logs --no-log-prefix --since 60s tf2-server 2>/dev/null | grep -aq 'Server restart in' && { echo "srcds quit (logged off Steam)"; break; }
-              sleep 1
-            done
-          fi
           $COMPOSE down -v --remove-orphans
           rm -f "$RUNNER_TEMP/secret-probe.values" .env
