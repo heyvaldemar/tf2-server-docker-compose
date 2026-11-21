@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`gameservermanagers/gameserver:tf2` was rebuilt upstream**; the pin moved from `sha256:7fda92c208cd…` to `sha256:2f5e8a923821…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
+
 ### Changed
 
 - **The Steam logon with the CI token is read from the server's own SteamID.** The log line the check looked for can be missing from a logon that worked, so it now reads the SteamID in the server's A2S answer until it settles: a persistent game server's passes; an anonymous one (the token never reached the server) or a token Steam refused fails the run; and no SteamID within five minutes is a warning that prints what the server saw, Steam's side rather than the template's. Every run writes `steam-logon:` and `steam-listed:` lines into its summary to be counted. The runs that can hold the token share one concurrency group, so two never log in with it at once; a fork's or Dependabot's pull request, which cannot have it, gets a group of its own and cannot cancel one that does.
