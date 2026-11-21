@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [2.2.4] - 2026-11-21
+
 ### Security
 
 - **`gameservermanagers/gameserver:tf2` was rebuilt upstream**; the pin moved from `sha256:7fda92c208cd…` to `sha256:2f5e8a923821…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
@@ -164,7 +168,8 @@ s check is what notices a rebuild.
   suite. It deliberately does not boot the game: the image is 10 GB compressed,
   and a test that pretends a runner can hold it never runs.
 
-[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.3...HEAD
+[Unreleased]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.4...HEAD
+[2.2.4]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/heyvaldemar/tf2-server-docker-compose/compare/v2.2.0...v2.2.1
